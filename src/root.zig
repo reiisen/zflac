@@ -5,7 +5,7 @@ const Dir = Io.Dir;
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
 const expectError = testing.expectError;
-const testFile: []const u8 = "/home/bak/Projects/zig/0.17.1/zflac/src/test.flac"; 
+const testFile: []const u8 = "/home/bak/Projects/zig/0.17.1/zflac/src/test.flac";
 
 fn printStruct(out: *std.Io.Writer, value: anytype) !void {
     const T = @TypeOf(value);
@@ -46,8 +46,9 @@ pub const BitReader = struct {
     }
 
     pub fn readBitF(self: *@This(), pos: usize) u1 {
-        // TODO: Implement bounds-unchecked reading 
-        self; pos;
+        // TODO: Implement bounds-unchecked reading
+        self;
+        pos;
         return 0;
     }
 
@@ -294,8 +295,8 @@ pub const MetadataBlock = enum(u7) {
     streaminfo,
     padding,
     application,
-    seektable,
-    vorbiscomment,
+    seek_table,
+    vorbis_comment,
     cuesheet,
     picture,
     forbidden = 127,
@@ -303,74 +304,64 @@ pub const MetadataBlock = enum(u7) {
     _,
 };
 
-pub const MetadataFlag = enum(u1) {
-    follow,
-    last
+pub const MetadataFlag = enum(u1) { follow, last };
+
+pub const StreamInfo = struct { min_block_size: u16, max_block_size: u16, min_frame_size: u24, max_frame_size: u24, sample_rate: u20, channels: u3, bit_depth: u5, total_samples: u36, md5: u128 };
+
+pub const Metadata = struct {
+    // ALL METADATA SHOULD BE STORED HERE
 };
 
-pub const StreamInfo = struct {
-    min_block_size: u16,
-    max_block_size: u16,
-    min_frame_size: u24,
-    max_frame_size: u24,
-    sample_rate: u20,
-    channels: u3,
-    bit_depth: u5,
-    total_samples: u36,
-    md5: u128
-};
-
-pub fn GetStreamInfo(bit_reader: *BitReader) !StreamInfo {
+pub fn getStreamInfo(bit_reader: *BitReader) !StreamInfo {
     // IN ORDER FOR THIS FUNCTION TO WORK, WE NEED THE BYTES
     // SPECIFICALLY, THE SIZE OF THE BLOCK SIZE DATA WE GOT
     // FROM THE HEADER
     // BUT I FEEL LIKE IT HAS DISCREPANCY...
     // STREAMINFO must be 34 bytes i think..
-    
+
     // u know what, ima just use this function to control the bitreader
 
     var streaminfo: StreamInfo = undefined;
     // so we are in STREAMINFO
     // now we just need to parse each stream data
-    
+
     // min block size
-    try bit_reader.readBits(16); 
+    try bit_reader.readBits(16);
     streaminfo.min_block_size = @truncate(bit_reader.current);
 
     // max block size
-    try bit_reader.readBits(16); 
+    try bit_reader.readBits(16);
     streaminfo.max_block_size = @truncate(bit_reader.current);
 
     // min frame size
-    try bit_reader.readBits(24); 
+    try bit_reader.readBits(24);
     streaminfo.min_frame_size = @truncate(bit_reader.current);
 
     // max frame size
-    try bit_reader.readBits(24); 
+    try bit_reader.readBits(24);
     streaminfo.max_frame_size = @truncate(bit_reader.current);
 
     // sample rate
-    try bit_reader.readBits(20); 
+    try bit_reader.readBits(20);
     streaminfo.sample_rate = @truncate(bit_reader.current);
 
     // number of channels
-    try bit_reader.readBits(3); 
+    try bit_reader.readBits(3);
     streaminfo.channels = @truncate(bit_reader.current);
 
-
     // bits per sample
-    try bit_reader.readBits(5); 
+    try bit_reader.readBits(5);
     streaminfo.bit_depth = @truncate(bit_reader.current);
 
     // total samples
-    try bit_reader.readBits(36); 
+    try bit_reader.readBits(36);
     streaminfo.total_samples = @truncate(bit_reader.current);
 
     // md5 checksum
     var actual: u128 = 0;
     const bitusize = @bitSizeOf(usize);
-    for (0.. 128 / bitusize) |_| {
-        try bit_reader.readBits(bitusize);  
+    for (0..128 / bitusize) |_| {
+        try bit_reader.readBits(bitusize);
         actual = actual << bitusize;
         actual = actual | bit_reader.current;
     }
@@ -380,23 +371,72 @@ pub fn GetStreamInfo(bit_reader: *BitReader) !StreamInfo {
     return streaminfo;
 }
 
+pub fn parseMetadata(bit_reader: *BitReader) !void {
+    // After sign check
+
+    // check for STREAMINFO
+
+    try bit_reader.readBits(1);
+    var flag: MetadataFlag = @fromBackingInt(@intCast(bit_reader.current));
+    if (flag != .follow) return error.NoMetadata;
+
+    try bit_reader.readBits(7);
+    var block: MetadataBlock = @fromBackingInt(@intCast(bit_reader.current));
+    if (block != .streaminfo) return error.NoStreaminfo;
+
+    try bit_reader.readBits(24);
+    var block_size = bit_reader.current;
+
+    while (flag == .follow) {
+        // bit reader pos should be currently in an actual block content
+        switch (block) {
+            .streaminfo => {},
+            .padding => {},
+            .application => {},
+            .seek_table => {},
+            .vorbis_comment => {},
+            .cuesheet => {},
+            .picture => {},
+            .forbidden => {},
+            // reserved block
+            else => {},
+        }
+        // parse next header
+        try bit_reader.readBits(1);
+        flag = @fromBackingInt(@intCast(bit_reader.current));
+        try bit_reader.readBits(7);
+        block = @fromBackingInt(@intCast(bit_reader.current));
+        try bit_reader.readBits(24);
+        block_size = bit_reader.current;
+    }
+}
+
+pub fn getSign(bit_reader: *BitReader) ![4]u8 {
+    var sign: [4]u8 = undefined;
+    for (0..sign.len) |i| {
+        try bit_reader.readBits(8);
+        sign[i] = bit_reader.current;
+    }
+    return sign;
+}
+
 test "walkthru" {
     const sign: []const u8 = "fLaC";
     const io = testing.io;
     const dir = std.testing.tmpDir(.{}).dir;
     const allocator = std.testing.allocator;
-    
+
     // retreive bytes
     var reader: FileReader = try FileReader.init(testFile, dir, io, 1028, allocator);
-    defer reader.free(io, allocator); 
+    defer reader.free(io, allocator);
 
     _ = try reader.next();
-    
+
     // check sign
-    var bitter = BitReader.init(reader.buf); 
-    
+    var bitter = BitReader.init(reader.buf);
+
     // check the 4 bytes
-    for (0.. sign.len) |i| {
+    for (0..sign.len) |i| {
         try bitter.readBits(8);
         try expectEqual(sign[i], bitter.current);
     }
@@ -405,23 +445,37 @@ test "walkthru" {
 
     // so now we read the METADATA block
     // first block must be a STREAMINFO
-    // HEADER BLOCK is 4 bytes, first byte is type and last flag vvvvvvv 
-    try bitter.readBits(1); 
-    try expectEqual(@intFromEnum(MetadataFlag.follow), bitter.current);  
+    // HEADER BLOCK is 4 bytes, first byte is type and last flag vvvvvvv
+    try bitter.readBits(1);
+    try expectEqual(@backingInt(MetadataFlag.follow), bitter.current);
 
-    try bitter.readBits(7); 
-    try expectEqual(@intFromEnum(MetadataBlock.streaminfo), bitter.current);  
+    try bitter.readBits(7);
+    try expectEqual(@backingInt(MetadataBlock.streaminfo), bitter.current);
 
     // remaining 3 bytes is the size of the block excluding the 4 bytes header
 
-    try bitter.readBits(24); 
-    try expectEqual(0x000022, bitter.current);  
+    try bitter.readBits(24);
+    try expectEqual(0x000022, bitter.current);
 
-    const streaminfo: StreamInfo = try GetStreamInfo(&bitter);
+    const streaminfo: StreamInfo = try getStreamInfo(&bitter);
 
     var w_buf: [1028]u8 = undefined;
-    var writer = Io.File.writer(Io.File.stdout(), testing.io, &w_buf);
+    var writer = Io.File.writer(Io.File.stderr(), testing.io, &w_buf);
     try printStruct(&writer.interface, streaminfo);
     std.debug.print("\n", .{});
     try writer.flush();
+
+    // this prints:
+    // root.StreamInfo {
+    //   min_block_size: 4096
+    //   max_block_size: 4096
+    //   min_frame_size: 14
+    //   max_frame_size: 14061
+    //   sample_rate: 44100
+    //   channels: 1
+    //   bit_depth: 15
+    //   total_samples: 12577908
+    //   md5: 268799252086975128256929308812284305753
+    // }
+
 }
